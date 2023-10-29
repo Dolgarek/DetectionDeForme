@@ -1,0 +1,1 @@
+find ./dataset -type f -name "*.png" -delete

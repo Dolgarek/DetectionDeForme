@@ -13,6 +13,6 @@ def print_hi(name):
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     print_hi('PyCharm')
-    ImgTransformer.create_img(10000)
+    ImgTransformer.create_img(1000)
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
