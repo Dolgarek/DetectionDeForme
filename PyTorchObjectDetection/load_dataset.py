@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 # download the following dataset in /Users/sorenmarcelino/fiftyone/coco-2017/validation
 dataset = foz.load_zoo_dataset(
     "coco-2017", split="validation",
-    max_samples=100,
 )
 print(dataset)
 session = fo.launch_app(dataset.view())  # visualize dataset in fiftyone tool
@@ -41,6 +40,10 @@ class CustomCocoDataset(Dataset):
     def __getitem__(self, idx):
         sample_id = self.ids[idx]
         sample = self.fiftyone_dataset[sample_id]  # get the fiftyone sample
+
+        if sample.ground_truth is None or sample.ground_truth.detections is None:
+            return None
+
         image = Image.open(sample.filepath).convert("RGB")  # load the image
         detections = sample.ground_truth.detections  # get the detections
         # convert the detections to the target format
@@ -92,17 +95,27 @@ transform = transforms.Compose([
 
 def custom_collate_fn(batch):
     # pad images to have the same size and create batches
-    batch_images = []
-    batch_targets = []
-    for image, target in batch:
-        batch_images.append(image)
+    batch = [item for item in batch if item is not None]  # filter out None values from the batch
+    # check if all items are not None
+    if not batch:
+        return None
+    # separate images and targets
+    batch_images, batch_targets = zip(*batch)
+    # update the target dictionnary to tensor, no need to stack
+    batch_targets = [
+        {
+            "boxes": torch.as_tensor(target["boxes"], dtype=torch.float32),
+            "labels": torch.as_tensor(target["labels"], dtype=torch.int64),
+            "area": torch.as_tensor(target["area"], dtype=torch.float32),
+            "iscrowd": torch.as_tensor(target["iscrowd"], dtype=torch.int64),
+        }
+        for target in batch_targets
+    ]
+    #for image, target in batch:
+        #batch_images.append(image)
 
-        # update the target dictionnary to tensor, no need to stack
-        target["boxes"] = torch.as_tensor(target["boxes"], dtype=torch.float32)
-        target["labels"] = torch.as_tensor(target["labels"], dtype=torch.int64)
-        target["area"] = torch.as_tensor(target["area"], dtype=torch.float32)
-        target["iscrowd"] = torch.as_tensor(target["iscrowd"], dtype=torch.int64)
-        batch_targets.append(target)
+
+        #batch_targets.append(target)
 
     return torch.stack(batch_images, 0), batch_targets
 
@@ -137,6 +150,8 @@ else:
     for epoch in range(num_epochs):
         model.train()
         for images, targets in data_loader:
+            if any(img is None or tgt is None for img, tgt in zip(images, targets)):
+                continue
             # move the batch of images and targets to the device used
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -168,7 +183,7 @@ model.load_state_dict(torch.load("model_weights.pth"))
 model.eval()
 
 # Step 9 : Prepare the image for inference
-image_path = "/Users/sorenmarcelino/Documents/DetectionDeForme/PyTorchObjectDetection/image.jpeg"
+image_path = "IMG_6557.jpeg"
 image = Image.open(image_path).convert("RGB")
 # transform the image
 transform = transforms.Compose([transforms.ToTensor()])
@@ -187,6 +202,6 @@ for box, label, score in zip(predictions[0]['boxes'], predictions[0]['labels'], 
     draw.text((box[0], box[1]), f"Label: {int(label)}, Score: {round(score.item(), 3)}", fill="red")
 
 # display the image with predictions
-plt.show(image)
+plt.imshow(image)
 plt.axis("off")
 plt.show()
