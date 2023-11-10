@@ -1,3 +1,5 @@
+import os
+
 import fiftyone as fo
 import fiftyone.zoo as foz
 
@@ -8,9 +10,13 @@ import torchvision.models.detection as detection_models
 from torch.nn.functional import pad
 
 from PIL import Image
+from PIL import ImageDraw
+
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+import matplotlib.pyplot as plt
 
 # Step 1 : Load the dataset
-# download the following dataset in /Users/sorenmarcelino/fiftyone/open-images-v7/train
+# download the following dataset in /Users/sorenmarcelino/fiftyone/coco-2017/validation
 dataset = foz.load_zoo_dataset(
     "coco-2017", split="validation",
     max_samples=100,
@@ -101,53 +107,86 @@ def custom_collate_fn(batch):
     return torch.stack(batch_images, 0), batch_targets
 
 
-# Step 4 : Create the Dataset and DataLoader
-coco_dataset = CustomCocoDataset(dataset, transform=transform)
-data_loader = DataLoader(coco_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
+if os.path.exists("model_weights.pth"):
+    print(f"The model already exists -> SKIP THIS STEP")
+else:
+    # Step 4 : Create the Dataset and DataLoader
+    coco_dataset = CustomCocoDataset(dataset, transform=transform)
+    data_loader = DataLoader(coco_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
 
-# Step 5 : Define the model, loss function and optimizer
-model = detection_models.fasterrcnn_resnet50_fpn(pretrained=True)  # load a pre-trained Faster R-CNN model
+    # Step 5 : Define the model, loss function and optimizer
+    model = detection_models.fasterrcnn_resnet50_fpn(pretrained=True)  # load a pre-trained Faster R-CNN model
 
-# replace the classifier with a new one, that has num_classes which is user-defined
-num_classes = 91  # COCO dataset has 80 classes + 1 background class
-in_features = model.roi_heads.box_predictor.cls_score.in_features
-model.roi_heads.boxpredictor = detection_models.fasterrcnn_resnet50_fpn(
-    pretrained=True).roi_heads.box_predictor.__class__(in_features, num_classes)
+    # replace the classifier with a new one, that has num_classes which is user-defined
+    num_classes = 91  # COCO dataset has 80 classes + 1 background class
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = detection_models.fasterrcnn_resnet50_fpn(
+        pretrained=True).roi_heads.box_predictor.__class__(in_features, num_classes)
 
-# define loss function and optimizer
-loss_function = torch.nn.CrossEntropyLoss()  # this not may be needed as loss is handled inside the model
-optimizer = torch.optim.SGD(model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005)
+    # define loss function and optimizer
+    loss_function = torch.nn.CrossEntropyLoss()  # this not may be needed as loss is handled inside the model
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005)
 
-# move model to the appropriate device (GPU if available)
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-model.to(device)
+    # move model to the appropriate device (GPU if available)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    model.to(device)
 
-# Step 6 : Train the model
-num_epochs = 10
+    # Step 6 : Train the model
+    num_epochs = 10
 
-for epoch in range(num_epochs):
-    model.train()
-    for images, targets in data_loader:
-        # move the batch of images and targets to the device used
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+    for epoch in range(num_epochs):
+        model.train()
+        for images, targets in data_loader:
+            # move the batch of images and targets to the device used
+            images = list(image.to(device) for image in images)
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        # forward pass
-        loss_dict = model(images, targets)
+            # forward pass
+            loss_dict = model(images, targets)
 
-        # the loss is a sum of all of the losses for all of the outputs
-        losses = sum(loss for loss in loss_dict.values())
+            # the loss is a sum of all of the losses for all of the outputs
+            losses = sum(loss for loss in loss_dict.values())
 
-        # backward pass and optimize
-        optimizer.zero_grad()
-        losses.backward()
-        optimizer.step()
+            # backward pass and optimize
+            optimizer.zero_grad()
+            losses.backward()
+            optimizer.step()
 
-    print(f'Epoch {epoch}/{num_epochs}, Loss: {losses}')
+        print(f'Epoch {epoch}/{num_epochs}, Loss: {losses}')
 
-# Step 7 : Validate the model
-# implement the validation loop
+    # Step 7 : Validate the model
+    # implement the validation loop
+    model.eval()
+
+    # Save the model
+    torch.save(model.state_dict(), 'model_weights.pth')
+
+# Step 8 : Load the pre-trained model
+model = fasterrcnn_resnet50_fpn(pretrained=False)
+# load the trained weights
+model.load_state_dict(torch.load("model_weights.pth"))
 model.eval()
 
-# Save the model
-torch.save(model.state_dict(), 'model_weights.pth')
+# Step 9 : Prepare the image for inference
+image_path = "/Users/sorenmarcelino/Documents/DetectionDeForme/PyTorchObjectDetection/image.jpeg"
+image = Image.open(image_path).convert("RGB")
+# transform the image
+transform = transforms.Compose([transforms.ToTensor()])
+input_tensor = transform(image).unsqueeze(0)  # add a batch dimension
+
+# Step 10 : Perform inference
+with torch.no_grad():
+    predictions = model(input_tensor)
+
+# Step 11 : Visualize the results
+draw = ImageDraw.Draw(image)
+
+for box, label, score in zip(predictions[0]['boxes'], predictions[0]['labels'], predictions[0]['scores']):
+    box = [round(i, 2) for i in box.tolist()]  # round coordinates for better visualization
+    draw.rectangle(box, outline="red", width=3)
+    draw.text((box[0], box[1]), f"Label: {int(label)}, Score: {round(score.item(), 3)}", fill="red")
+
+# display the image with predictions
+plt.show(image)
+plt.axis("off")
+plt.show()
