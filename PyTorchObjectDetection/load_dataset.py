@@ -1,4 +1,5 @@
 import os
+import time
 
 import fiftyone as fo
 import fiftyone.zoo as foz
@@ -144,8 +145,39 @@ else:
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model.to(device)
 
-    # Step 6 : Train the model
-    num_epochs = 10
+    # Step 6 : Train the model on 10 epochs
+    num_epochs = 5
+
+    # Step 4.1 : Create a small subset of the Dataset for time estimation
+    subset_dataset = CustomCocoDataset(dataset[:10], transform=transform)
+    subset_data_loader = DataLoader(subset_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn)
+
+    # Step 4.2 : Estimate the time for a single iteration
+    start_time = time.time()
+    for images, targets in subset_data_loader:
+        if any(img is None or tgt is None for img, tgt in zip(images, targets)):
+            continue
+        # move the batch of images and targets to the device used
+        images = list(image.to(device) for image in images)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        # forward pass
+        loss_dict = model(images, targets)
+
+        # the loss is a sum of all of the losses for all of the outputs
+        losses = sum(loss for loss in loss_dict.values())
+
+        # backward pass and optimize
+        optimizer.zero_grad()
+        losses.backward()
+        optimizer.step()
+
+    end_time = time.time()
+    single_iteration_time = end_time - start_time
+
+    # Estimate total training time
+    total_training_time = single_iteration_time * len(data_loader) * num_epochs
+    print(f"Estimated total training time: {total_training_time:.2f} seconds")
 
     for epoch in range(num_epochs):
         model.train()
@@ -183,7 +215,7 @@ model.load_state_dict(torch.load("model_weights.pth"))
 model.eval()
 
 # Step 9 : Prepare the image for inference
-image_path = "IMG_6557.jpeg"
+image_path = "stop.jpeg"
 image = Image.open(image_path).convert("RGB")
 # transform the image
 transform = transforms.Compose([transforms.ToTensor()])
